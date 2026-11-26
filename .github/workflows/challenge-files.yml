@@ -17,7 +17,7 @@ name: challenge files
 #   rest stay as they are;
 # - changes the settings of `lake-manifest.json` other than its packages, changes the address of
 #   Mathlib there, or lists a package that is not a Git repository of leanprover-community or
-#   leanprover on GitHub;
+#   leanprover on GitHub, except the unchanged Tau Ceti dependency already pinned in the base;
 # - names a toolchain in `lean-toolchain` other than a release of leanprover/lean4;
 # - adds files under `.lake/`.
 #
@@ -145,7 +145,10 @@ jobs:
 
           def manifest(text):
               data = json.loads(text)
-              packages = {package.get("name"): package for package in data.get("packages", [])}
+              entries = data.get("packages", [])
+              if sum(package.get("name") == "TauCeti" for package in entries) > 1:
+                  raise ValueError("lake-manifest.json lists TauCeti more than once")
+              packages = {package.get("name"): package for package in entries}
               return {key: value for key, value in data.items() if key != "packages"}, packages
 
           try:
@@ -155,14 +158,20 @@ jobs:
               if any(lakefile(read(fork, "lakefile.toml") or "") != new for fork in forks):
                   error("lakefile.toml", "This pull request changes lakefile.toml other than in Mathlib's rev, leanOptions, defaultTargets, lean_exe or [cache].")
               settings, packages = manifest(read(head, "lake-manifest.json") or "{}")
+              tauceti_unchanged = True
               for fork in forks:
                   old_settings, old_packages = manifest(read(fork, "lake-manifest.json") or "{}")
+                  tauceti_unchanged &= old_packages.get("TauCeti") == packages.get("TauCeti")
                   if old_settings != settings:
                       error("lake-manifest.json", "This pull request changes the settings of lake-manifest.json.")
                   if (old_packages.get("mathlib") or {}).get("url") != (packages.get("mathlib") or {}).get("url"):
                       error("lake-manifest.json", "This pull request changes where Mathlib comes from.")
               for name, package in packages.items():
-                  if package.get("type") != "git" or not str(package.get("url")).startswith(TRUSTED):
+                  url = package.get("url")
+                  if (tauceti_unchanged and name == "TauCeti" and package.get("type") == "git"
+                      and url == "https://github.com/TauCetiProject/TauCeti"):
+                      continue
+                  if package.get("type") != "git" or not str(url).startswith(TRUSTED):
                       error("lake-manifest.json", f"The package {name} is not a Git repository of leanprover-community or leanprover on GitHub.")
               toolchain = (read(head, "lean-toolchain") or "").strip()
               if not re.fullmatch(r"leanprover/lean4:v[0-9][0-9A-Za-z.+-]*", toolchain):
